@@ -10,6 +10,7 @@ try:
 except ImportError:
     import Image
 import pytesseract #Google OCR
+pytesseract.pytesseract.tesseract_cmd = '/Users/Ayaan/homebrew/Cellar/tesseract/5.3.1_1/bin/tesseract'
 
 #Read file
 #read the file
@@ -89,9 +90,12 @@ bitxor = cv2.bitwise_xor(img, img_boxes)
 bitnot = cv2.bitwise_not(bitxor) #Ms Tang pls be proud
 
 
+# Detect contours for following box detection
+contours, hierarchy = cv2.findContours(img_boxes, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
 #Nows the fun part
 
-def contours(cnts, method="left-to-right"):
+def sort_contours(cnts, method="left-to-right"):
 
     reverse = False
     i = 0
@@ -104,6 +108,115 @@ def contours(cnts, method="left-to-right"):
     return(cnts, sortedBoxes)
 
 #sort cnts by top to bottom
-contours, sortedBoxes = contours(contours, method="left-to-right")
+contours, sortedBoxes = sort_contours(contours, method="left-to-right")
 
-#
+#Get day of period
+heights = [sortedBoxes[i][3] for i in range(len(sortedBoxes))]
+
+#get average height so we can figure out the rough amount for day, kinda like repeating a science experiment for accuracy
+mean = np.mean(heights)
+
+#list of boxes
+boxAll = []
+
+#Get position (x,y), width and height for every contour and show the contour on image
+for c in contours:
+    x, y, w, h = cv2.boundingRect(c)
+
+    if (w<1000 and 90<h):
+        image = cv2.rectangle(img,(x,y),(x+w, y+h),(250, 10, 300), 2)
+        print()
+        boxAll.append([x, y, w, h])
+
+plotting = plt.imshow(image, cmap='gray')
+plt.show()
+
+#Creating two lists to define row and coloumn in which cell is located for each
+row = []
+coloumn = []
+j=0
+
+#sorting the boxes to their respective row and coloumn (Can edit)
+
+for i in range(len(boxAll)):
+    if(i==0): #get where the coloumn starts
+        coloumn.append(boxAll[i])
+        previous = boxAll[i]
+    else:
+        if(boxAll[i][1]<=previous[1]+mean/2):
+            coloumn.append(boxAll[i])
+            previous=boxAll[i]
+
+            if(i==len(boxAll)-1):
+                row.append(coloumn)
+        else:
+            row.append(coloumn)
+            coloumn=[]
+            previous = boxAll[i]
+            coloumn.append(boxAll[i])
+print(coloumn)
+print("row:")
+print(row)
+
+#get max cells
+
+countcol = 0
+for i in range(len(row)):
+    countcol = len(row[i])
+    if countcol > countcol:
+        countcol = countcol
+
+#get the center of each coloumn
+
+center = [int(row[i][j][0]+row[i][j][2]/2) for j in range(len(row[i])) if row[0]]
+
+center = np.array(center)
+center.sort()
+
+#arrange boxes by order by using center
+finalboxes = []
+
+for i in range(len(row)):
+    arr=[]
+    for k in range(countcol):
+        arr.append([])
+    for j in range(len(row[i])):
+        diff = abs(center-(row[i][j][0]+row[i][j][2]/4))
+        minimum = min(diff)
+        indexing = list(diff).index(minimum)
+        arr[indexing].append(row[i][j])
+    finalboxes.append(arr)
+
+#Extract text from cells through Pytesseract
+outer = []
+for i in range(len(finalboxes)):
+    for j in range(len(finalboxes[i])):
+        inner=''
+        if(len(finalboxes[i][j])==0):
+            outer.append(" ")
+        else:
+            for k in range(len(finalboxes[i][j])):
+                y,x,w,h = finalboxes[i][j][k][0],finalboxes[i][j][k][1], finalboxes[i][j][k][2], finalboxes[i][j][k][3]
+                finalimg = bitnot[x:x+h, y:y+w]
+                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 1))
+                border = cv2.copyMakeBorder(finalimg,2,2,2,2,cv2.BORDER_CONSTANT, value=[255, 255])
+                resizing = cv2.resize(border, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+                dilation = cv2.dilate(resizing, kernel, iterations=1)
+                erosion = cv2.erode(dilation, kernel, iterations=1)
+
+                out = pytesseract.image_to_string(erosion)
+                if len((out)==0):
+                    out = pytesseract.image_to_string(erosion, config='-- psm 3')
+                inner = inner+ " "+ out
+
+            outer.append(inner)
+
+#Create df of schedule
+arr = np.array(outer)
+dataframe = pd.DataFrame(arr.reshape(len(row), countcol))
+print("here")
+print(dataframe)
+data = dataframe.style.set_properties(align="left")
+
+#Make into excel file
+data.to_excel("/Users/Ayaan/Downloads/schedule.xlsx")
